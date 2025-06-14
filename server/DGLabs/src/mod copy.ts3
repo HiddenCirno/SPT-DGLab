@@ -1,0 +1,364 @@
+// mod.ts
+import { DependencyContainer } from "tsyringe";
+import express from 'express';
+import WebSocket, { WebSocketServer } from 'ws';
+import QRCode from 'qrcode';
+import { v4 as uuidv4 } from 'uuid';
+import { IPostDBLoadMod } from "@spt/models/external/IPostDBLoadMod";
+import { DatabaseServer } from "@spt/servers/DatabaseServer";
+import { IPreSptLoadMod } from "@spt/models/external/IPreSptLoadMod";
+import { DialogueHelper } from "@spt/helpers/DialogueHelper";
+import { IPostSptLoadMod } from "@spt/models/external/IPostSptLoadMod";
+import type { StaticRouterModService } from "@spt/services/mod/staticRouter/StaticRouterModService";
+import { ILogger } from "@spt/models/spt/utils/ILogger";
+import { ImageRouter } from "@spt/routers/ImageRouter";
+import { ConfigServer } from "@spt/servers/ConfigServer";
+import { ConfigTypes } from "@spt/models/enums/ConfigTypes";
+import { ITraderConfig, UpdateTime } from "@spt/models/spt/config/ITraderConfig";
+import { IModLoader } from "@spt/models/spt/mod/IModLoader";
+import { PreSptModLoader } from "@spt/loaders/PreSptModLoader";
+import { Traders } from "@spt/models/enums/Traders";
+import { QuestStatus } from "@spt/models/enums/QuestStatus";
+import { MessageType } from "@spt/models/enums/MessageType";
+import { HashUtil } from "@spt/utils/HashUtil";
+import { NotificationSendHelper } from "@spt/helpers/NotificationSendHelper";
+import { NotifierHelper } from "@spt/helpers/NotifierHelper";
+import { QuestHelper } from "@spt/helpers/QuestHelper";
+import { ImporterUtil } from "@spt/utils/ImporterUtil"
+import { BundleLoader } from "@spt/loaders/BundleLoader";
+import * as ModConfig from "../config.json";
+
+
+// 定义接口和类型
+interface ClientConnection {
+    ws: WebSocket;
+    id: string;
+    type: 'control' | 'device';
+    boundTo?: string;
+}
+
+interface WebSocketMessage {
+    type: string;
+    clientId?: string;
+    targetId?: string;
+    message: string;
+}
+
+class Mod implements IPreSptLoadMod, IPostDBLoadMod {
+    private logger: ILogger;
+    private wss: WebSocketServer;
+    private expressServer: http.Server;
+    private controlClient: WebSocket | null = null;
+    private clients = new Map<string, ClientConnection>();
+    private relations = new Map<string, string>(); // clientId -> targetId
+    private controlId: string = '';
+    private serverPort: number;
+    private httpPort: number;
+
+    constructor() {
+        this.serverPort = 9999;
+        this.httpPort = 3000;
+    }
+
+    public preSptLoad(container: DependencyContainer): void {
+        this.logger = container.resolve<ILogger>("WinstonLogger");
+        this.startWebSocketServer();
+        this.startExpressServer();
+        this.logger.info(`[DG-LAB Control] WebSocket Server started on port ${this.serverPort}`);
+        this.logger.info(`[DG-LAB Control] HTTP Server started on port ${this.httpPort}`);
+    }
+
+    public postSptLoad(container: DependencyContainer): void {
+        // 
+    }
+    public postDBLoad(container: DependencyContainer): void {
+        // 可以在这里添加数据库加载后的逻辑
+    }
+
+    private startWebSocketServer(): void {
+        // 创建WebSocket服务器
+        this.wss = new WebSocketServer({ port: this.serverPort, host: "192.168.31.70"});
+
+        this.wss.on('connection', (ws) => {
+            const clientId = uuidv4();
+            this.clients.set(clientId, { ws, id: clientId, type: 'device' });
+
+            // 发送绑定信息给客户端
+            ws.send(JSON.stringify({
+                type: 'bind',
+                clientId,
+                targetId: '',
+                message: 'targetId'
+            }));
+
+            ws.on('message', (data) => this.handleMessage(clientId, data.toString()));
+            ws.on('close', () => this.handleClose(clientId));
+            ws.on('error', (error) => this.handleError(clientId, error));
+        });
+
+        // 启动控制端客户端（连接到自身服务器）
+        this.connectAsControlClient();
+    }
+
+    private connectAsControlClient(): void {
+        this.controlClient = new WebSocket(`ws://192.168.31.70:${this.serverPort}/`);
+        this.controlId = uuidv4();
+
+        this.controlClient.on('open', () => {
+            this.logger.info('[DG-LAB Control] Control client connected to WebSocket server');
+
+            // 存储控制端客户端
+            this.clients.set(this.controlId, {
+                ws: this.controlClient!,
+                id: this.controlId,
+                type: 'control'
+            });
+        });
+
+        this.controlClient.on('message', (data) => {
+            const message = JSON.parse(data.toString()) as WebSocketMessage;
+            this.logger.debug(`[Control Client] Received: ${JSON.stringify(message)}`);
+
+            // 处理绑定确认
+            if (message.type === 'bind') {
+                this.logger.success('[DG-LAB Control] Device binding confirmed');
+            }
+
+            // 处理设备状态更新
+            if (message.type === 'msg' && message.message.startsWith('strength-')) {
+                this.logger.info(`[DG-LAB Control] Device status update: ${message.message}`);
+            }
+        });
+
+        this.controlClient.on('error', (error) => {
+            this.logger.error(`[Control Client] Error: ${error.message}`);
+        });
+
+        this.controlClient.on('close', () => {
+            this.logger.warning('[DG-LAB Control] Control client disconnected');
+        });
+    }
+
+    private startExpressServer(): void {
+        const app = express();
+
+        // 提供二维码生成服务
+        app.get('/qrcode', async (req, res) => {
+            try {
+                const wsUrl = `ws://192.168.31.70:${this.serverPort}/`;
+                const qrContent = `https://www.dungeon-lab.com/app-download.php#DGLAB-SOCKET#${wsUrl}${this.controlId}`;
+
+                const qrImage = await QRCode.toDataURL(qrContent);
+                res.send(`<img src="${qrImage}" alt="DG-LAB QR Code"/>`);
+            } catch (error) {
+                res.status(500).send('Error generating QR code');
+            }
+        });
+
+        // 提供绑定状态
+        app.get('/status', (req, res) => {
+            const isBound = this.relations.has(this.controlId);
+            res.json({
+                status: isBound ? 'bound' : 'waiting',
+                controlId: this.controlId,
+                deviceId: isBound ? this.relations.get(this.controlId) : null
+            });
+        });
+
+        // 启动HTTP服务器
+        this.expressServer = app.listen(this.httpPort, () => {
+            this.logger.info(`[DG-LAB Control] QR code available at http://192.168.31.70:${this.httpPort}/qrcode`);
+        });
+    }
+
+    private handleMessage(clientId: string, data: string): void {
+        try {
+            const message = JSON.parse(data) as WebSocketMessage;
+            this.logger.debug(`Received message from ${clientId}: ${data}`);
+
+            switch (message.type) {
+                case 'bind':
+                    this.handleBind(clientId, message);
+                    break;
+                case 'msg':
+                    this.handleDeviceMessage(clientId, message);
+                    break;
+                case 'heartbeat':
+                    this.handleHeartbeat(clientId);
+                    break;
+                default:
+                    this.logger.warning(`Unknown message type: ${message.type}`);
+            }
+        } catch (error) {
+            this.logger.error(`Error parsing message: ${error}`);
+        }
+    }
+
+    private handleBind(clientId: string, message: WebSocketMessage): void {
+        const connection = this.clients.get(clientId);
+
+        if (!connection) {
+            this.logger.error(`Client not found: ${clientId}`);
+            return;
+        }
+
+        // APP端绑定请求
+        if (message.message === 'DGLAB') {
+            const targetId = message.targetId!;
+
+            // 检查是否已绑定
+            if (this.relations.has(clientId)) {
+                this.sendError(clientId, '400', 'Already bound');
+                return;
+            }
+
+            // 存储绑定关系
+            this.relations.set(clientId, targetId);
+            this.relations.set(targetId, clientId);
+
+            // 更新连接类型
+            connection.type = 'device';
+            connection.boundTo = targetId;
+
+            // 通知双方绑定成功
+            this.sendToClient(clientId, {
+                type: 'bind',
+                clientId,
+                targetId,
+                message: '200'
+            });
+
+            this.sendToClient(targetId, {
+                type: 'bind',
+                clientId: targetId,
+                targetId: clientId,
+                message: '200'
+            });
+            setInterval(() => {
+                //console.log(`[HEARTBEAT] Checking clients. Size: ${this.clients.size}`);
+                this.sendToClient(targetId, {
+                    type: 'heartbeat',
+                    clientId: targetId,
+                    targetId: clientId,
+                    message: '200'
+                });
+            }, 5000);
+            this.logger.success(`Device bound: ${clientId} <-> ${targetId}`);
+        }
+    }
+
+    private handleDeviceMessage(clientId: string, message: WebSocketMessage): void {
+        const targetId = this.relations.get(clientId);
+
+        if (!targetId) {
+            this.sendError(clientId, '402', 'Not bound to any device');
+            return;
+        }
+
+        // 转发消息给绑定的设备
+        this.sendToClient(targetId, {
+            type: 'msg',
+            clientId,
+            targetId,
+            message: message.message
+        });
+    }
+
+    private handleHeartbeat(clientId: string): void {
+        const connection = this.clients.get(clientId);
+        if (connection) {
+            connection.ws.ping();
+        }
+    }
+
+    private handleClose(clientId: string): void {
+        const connection = this.clients.get(clientId);
+        if (!connection) return;
+
+        // 处理绑定关系断开
+        if (connection.boundTo) {
+            const boundId = connection.boundTo;
+            this.relations.delete(clientId);
+            this.relations.delete(boundId);
+
+            // 通知另一方
+            const boundConnection = this.clients.get(boundId);
+            if (boundConnection) {
+                this.sendToClient(boundId, {
+                    type: 'break',
+                    clientId: boundId,
+                    targetId: clientId,
+                    message: '209'
+                });
+            }
+        }
+
+        this.clients.delete(clientId);
+        this.logger.info(`Client disconnected: ${clientId}`);
+    }
+
+    private handleError(clientId: string, error: Error): void {
+        this.logger.error(`Client error [${clientId}]: ${error.message}`);
+        this.sendToClient(clientId, {
+            type: 'error',
+            clientId,
+            targetId: '',
+            message: '500'
+        });
+    }
+
+    private sendToClient(clientId: string, message: WebSocketMessage): void {
+        const connection = this.clients.get(clientId);
+        if (connection && connection.ws.readyState === WebSocket.OPEN) {
+            connection.ws.send(JSON.stringify(message));
+        }
+    }
+
+    private sendError(clientId: string, code: string, description: string): void {
+        this.sendToClient(clientId, {
+            type: 'error',
+            clientId,
+            targetId: '',
+            message: code
+        });
+        this.logger.warning(`Error ${code}: ${description}`);
+    }
+
+    // 设备控制方法
+    public setStrength(channel: 'A' | 'B', value: number): void {
+        if (!this.controlId || !this.relations.has(this.controlId)) {
+            this.logger.warning('Cannot set strength: no device bound');
+            return;
+        }
+
+        const deviceId = this.relations.get(this.controlId)!;
+        this.sendToClient(deviceId, {
+            type: 'msg',
+            clientId: this.controlId,
+            targetId: deviceId,
+            message: `strength-${channel === 'A' ? 1 : 2}+2+${value}`
+        });
+    }
+
+    public sendPulse(channel: 'A' | 'B', pulses: string[]): void {
+        if (!this.controlId || !this.relations.has(this.controlId)) {
+            this.logger.warning('Cannot send pulse: no device bound');
+            return;
+        }
+
+        if (pulses.length > 100) {
+            this.logger.warning('Pulse array too long (max 100)');
+            return;
+        }
+
+        const deviceId = this.relations.get(this.controlId)!;
+        this.sendToClient(deviceId, {
+            type: 'msg',
+            clientId: this.controlId,
+            targetId: deviceId,
+            message: `pulse-${channel}:${JSON.stringify(pulses)}`
+        });
+    }
+}
+
+module.exports = { mod: new Mod() }

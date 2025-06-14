@@ -1,0 +1,260 @@
+// mod.ts
+import { DependencyContainer } from "tsyringe"
+import express from 'express';
+import WebSocket, { WebSocketServer } from 'ws';
+import QRCode from 'qrcode';
+import { v4 as uuidv4 } from 'uuid';
+import { IPostDBLoadMod } from "@spt/models/external/IPostDBLoadMod";
+import { DatabaseServer } from "@spt/servers/DatabaseServer";
+import { IPreSptLoadMod } from "@spt/models/external/IPreSptLoadMod";
+import { DialogueHelper } from "@spt/helpers/DialogueHelper";
+import { IPostSptLoadMod } from "@spt/models/external/IPostSptLoadMod";
+import type { StaticRouterModService } from "@spt/services/mod/staticRouter/StaticRouterModService";
+import { ILogger } from "@spt/models/spt/utils/ILogger";
+import { ImageRouter } from "@spt/routers/ImageRouter";
+import { ConfigServer } from "@spt/servers/ConfigServer";
+import { ConfigTypes } from "@spt/models/enums/ConfigTypes";
+import { ITraderConfig, UpdateTime } from "@spt/models/spt/config/ITraderConfig";
+import { IModLoader } from "@spt/models/spt/mod/IModLoader";
+import { PreSptModLoader } from "@spt/loaders/PreSptModLoader";
+import { Traders } from "@spt/models/enums/Traders";
+import { QuestStatus } from "@spt/models/enums/QuestStatus";
+import { MessageType } from "@spt/models/enums/MessageType";
+import { HashUtil } from "@spt/utils/HashUtil";
+import { NotificationSendHelper } from "@spt/helpers/NotificationSendHelper";
+import { NotifierHelper } from "@spt/helpers/NotifierHelper";
+import { QuestHelper } from "@spt/helpers/QuestHelper";
+import { ImporterUtil } from "@spt/utils/ImporterUtil"
+import { BundleLoader } from "@spt/loaders/BundleLoader";
+import * as ModConfig from "../config.json";
+
+const PORT = "9999"
+const HOST = "192.168.31.70"
+// 定义接口和类型
+
+interface ClientMessage {
+    type: string | number;
+    clientId: string;
+    targetId: string;
+    message: string;
+    channel?: string;
+    time?: number;
+    strength?: number;
+}
+
+
+class Mod implements IPreSptLoadMod, IPostDBLoadMod {
+    private logger: ILogger;
+    private wss: WebSocketServer;
+    private clients: Map<string, WebSocket> = new Map();
+    private relations: Map<string, string> = new Map();
+    private clientTimers: Map<string, NodeJS.Timer> = new Map();
+    private heartbeatInterval: NodeJS.Timer | null = null;
+    private readonly punishmentDuration = 5;
+    private readonly punishmentTime = 1;
+
+
+    public preSptLoad(container: DependencyContainer): void {
+        //
+    }
+
+    public postSptLoad(container: DependencyContainer): void {
+        // 
+    }
+    public postDBLoad(container: DependencyContainer): void {
+        // 可以在这里添加数据库加载后的逻辑
+        
+        this.wss = new WebSocketServer({ port: PORT, host: HOST });
+        this.init();
+    }
+    private init() {
+        this.wss.on('connection', (ws) => this.handleConnection(ws));
+        this.heartbeatInterval = setInterval(() => this.sendHeartbeat(), 60 * 1000);
+    }
+
+    private handleConnection(ws: WebSocket) {
+        const clientId = uuidv4();
+        this.clients.set(clientId, ws);
+        console.log('新连接:', clientId);
+
+        ws.send(JSON.stringify({ type: 'bind', clientId, message: 'targetId', targetId: '' }));
+
+        ws.on('message', (msg) => this.handleMessage(ws, msg.toString()));
+        ws.on('close', () => this.handleClose(ws));
+        ws.on('error', (error) => this.handleError(ws, error));
+    }
+
+    private handleMessage(ws: WebSocket, msg: string) {
+        let data: ClientMessage;
+        console.log("收到消息（监听）：", msg);
+        try {
+            data = JSON.parse(msg);
+        } catch {
+            ws.send(JSON.stringify({ type: 'msg', message: '403' }));
+            return;
+        }
+
+        const { clientId, targetId, message, type } = data;
+
+        if (!this.validateClient(ws, clientId, targetId)) return;
+
+        switch (type) {
+            case 'bind':
+                this.bindClients(ws, clientId, targetId);
+                break;
+            case 1:
+            case 2:
+            case 3:
+                this.sendStrength(clientId, targetId, type as number, data);
+                break;
+            case 4:
+                this.forwardMessage(clientId, targetId, message);
+                break;
+            case 'clientMsg':
+                this.handleClientMsg(ws, data);
+                break;
+            default:
+                this.forwardMessage(clientId, targetId, message, type);
+                break;
+        }
+    }
+
+    private validateClient(ws: WebSocket, clientId: string, targetId: string): boolean {
+        if (this.clients.get(clientId) !== ws && this.clients.get(targetId) !== ws) {
+            ws.send(JSON.stringify({ type: 'msg', message: '404' }));
+            return false;
+        }
+        return true;
+    }
+
+    private bindClients(ws: WebSocket, clientId: string, targetId: string) {
+        if (!this.clients.has(clientId) || !this.clients.has(targetId)) {
+            ws.send(JSON.stringify({ type: 'bind', clientId, targetId, message: '401' }));
+            return;
+        }
+
+        if ([clientId, targetId].some(id => this.relations.has(id) || [...this.relations.values()].includes(id))) {
+            ws.send(JSON.stringify({ type: 'bind', clientId, targetId, message: '400' }));
+            return;
+        }
+
+        this.relations.set(clientId, targetId);
+        const response = { type: 'bind', clientId, targetId, message: '200' };
+        ws.send(JSON.stringify(response));
+        this.clients.get(clientId)?.send(JSON.stringify(response));
+    }
+
+    private sendStrength(clientId: string, targetId: string, type: number, data: ClientMessage) {
+        if (this.relations.get(clientId) !== targetId || !this.clients.has(targetId)) return;
+
+        const sendType = type - 1;
+        const channel = data.channel || '1';
+        const strength = type >= 3 ? data.strength || 1 : 1;
+        const msg = `strength-${channel}+${sendType}+${strength}`;
+
+        this.clients.get(targetId)?.send(JSON.stringify({ type: 'msg', clientId, targetId, message: msg }));
+    }
+
+    private forwardMessage(clientId: string, targetId: string, message: string, type: any = 'msg') {
+        if (this.relations.get(clientId) !== targetId || !this.clients.has(targetId)) return;
+        this.clients.get(targetId)?.send(JSON.stringify({ type, clientId, targetId, message }));
+    }
+
+    private handleClientMsg(ws: WebSocket, data: ClientMessage) {
+        const { clientId, targetId, message, channel, time } = data;
+
+        if (this.relations.get(clientId) !== targetId || !channel || !this.clients.has(targetId)) {
+            ws.send(JSON.stringify({ type: 'error', message: '406-channel is empty' }));
+            return;
+        }
+
+        const target = this.clients.get(targetId)!;
+        const sendData = { type: 'msg', clientId, targetId, message: `pulse-${message}` };
+        const total = (time || this.punishmentDuration) * this.punishmentTime;
+        const interval = 1000 / this.punishmentTime;
+        const timerKey = `${clientId}-${channel}`;
+
+        if (this.clientTimers.has(timerKey)) {
+            clearInterval(this.clientTimers.get(timerKey)!);
+            this.clientTimers.delete(timerKey);
+            target.send(JSON.stringify({ type: 'msg', clientId, targetId, message: `clear-${channel === 'A' ? 1 : 2}` }));
+            setTimeout(() => this.startSending(clientId, ws, target, sendData, total, interval, channel), 150);
+        } else {
+            this.startSending(clientId, ws, target, sendData, total, interval, channel);
+        }
+    }
+
+    private startSending(
+        clientId: string,
+        sender: WebSocket,
+        target: WebSocket,
+        sendData: object,
+        count: number,
+        interval: number,
+        channel: string
+    ) {
+        let remaining = count;
+        target.send(JSON.stringify(sendData));
+        remaining--;
+
+        const timer = setInterval(() => {
+            if (remaining-- > 0) {
+                target.send(JSON.stringify(sendData));
+            } else {
+                clearInterval(timer);
+                this.clientTimers.delete(`${clientId}-${channel}`);
+                sender.send(JSON.stringify({ type: 'msg', message: '发送完毕' }));
+            }
+        }, interval);
+
+        this.clientTimers.set(`${clientId}-${channel}`, timer);
+    }
+
+    private handleClose(ws: WebSocket) {
+        let closedId = '';
+        for (const [id, client] of this.clients.entries()) {
+            if (client === ws) closedId = id;
+        }
+
+        for (const [key, value] of this.relations.entries()) {
+            if (key === closedId || value === closedId) {
+                const otherId = key === closedId ? value : key;
+                this.clients.get(otherId)?.send(JSON.stringify({ type: 'break', clientId: key, targetId: value, message: '209' }));
+                this.clients.get(otherId)?.close();
+                this.relations.delete(key);
+            }
+        }
+
+        this.clients.delete(closedId);
+        console.log(`清除连接 ${closedId}`);
+    }
+
+    private handleError(ws: WebSocket, error: Error) {
+        let errorId = '';
+        for (const [id, client] of this.clients.entries()) {
+            if (client === ws) errorId = id;
+        }
+
+        const errorMsg = `WebSocket 异常: ${error.message}`;
+        for (const [key, value] of this.relations.entries()) {
+            if (key === errorId || value === errorId) {
+                const otherId = key === errorId ? value : key;
+                this.clients.get(otherId)?.send(JSON.stringify({ type: 'error', clientId: key, targetId: value, message: errorMsg }));
+            }
+        }
+    }
+
+    private sendHeartbeat() {
+        if (this.clients.size === 0) return;
+        console.log('发送心跳:', new Date().toLocaleString());
+        this.clients.forEach((client, clientId) => {
+            const targetId = this.relations.get(clientId) || '';
+            client.send(JSON.stringify({ type: 'heartbeat', clientId, targetId, message: '200' }));
+        });
+    }
+}
+
+
+
+
+module.exports = { mod: new Mod() }

@@ -1,0 +1,419 @@
+import { DependencyContainer } from "tsyringe";
+import express from 'express';
+import WebSocket, { WebSocketServer, WebSocketClient } from 'ws';
+import { v4 as uuidv4, v5 as uuidv5, NIL as nilUuid } from 'uuid';
+import QRCode from 'qrcode';
+import { IPostDBLoadMod } from "@spt/models/external/IPostDBLoadMod";
+import { DatabaseServer } from "@spt/servers/DatabaseServer";
+import { IPreSptLoadMod } from "@spt/models/external/IPreSptLoadMod";
+import { DialogueHelper } from "@spt/helpers/DialogueHelper";
+import { IPostSptLoadMod } from "@spt/models/external/IPostSptLoadMod";
+import type { StaticRouterModService } from "@spt/services/mod/staticRouter/StaticRouterModService";
+import { ILogger } from "@spt/models/spt/utils/ILogger";
+import { ImageRouter } from "@spt/routers/ImageRouter";
+import { ConfigServer } from "@spt/servers/ConfigServer";
+import { ConfigTypes } from "@spt/models/enums/ConfigTypes";
+import { ITraderConfig, UpdateTime } from "@spt/models/spt/config/ITraderConfig";
+import { IModLoader } from "@spt/models/spt/mod/IModLoader";
+import { PreSptModLoader } from "@spt/loaders/PreSptModLoader";
+import { Traders } from "@spt/models/enums/Traders";
+import { QuestStatus } from "@spt/models/enums/QuestStatus";
+import { MessageType } from "@spt/models/enums/MessageType";
+import { HashUtil } from "@spt/utils/HashUtil";
+import { NotificationSendHelper } from "@spt/helpers/NotificationSendHelper";
+import { NotifierHelper } from "@spt/helpers/NotifierHelper";
+import { QuestHelper } from "@spt/helpers/QuestHelper";
+import { ImporterUtil } from "@spt/utils/ImporterUtil"
+import { BundleLoader } from "@spt/loaders/BundleLoader";
+import { VulcanCommon } from "../../[火神之心]VulcanCore/src/vulcan-api/Common";
+import * as ModConfig from "../config.json";
+
+// 配置常量
+const CONFIG = {
+    HTTP_PORT: 3001,
+    WS_PORT: 9999,
+    DEFAULT_CLIENT_ID: 'CONTROL_CENTER',
+    APP_ID_PREFIX: 'APP_',
+    QR_CODE_EXPIRE: 300,
+    HEARTBEAT_INTERVAL: 5 * 1000,
+    MAX_MESSAGE_SIZE: 1950
+};
+
+const deviceStates = new Map(); // 存储设备最新状态 { clientId: state }
+
+class Mod implements IPreSptLoadMod {
+    private static instance: Mod;
+    private wsServer: WebSocketServer;
+    private clients = new Map<string, WebSocket>();
+    private relations = new Map<string, string>();
+    private latestTargetId = CONFIG.APP_ID_PREFIX + uuidv5("TARGET_ID", nilUuid);
+    private latestClientId = CONFIG.APP_ID_PREFIX + uuidv5(CONFIG.DEFAULT_CLIENT_ID, nilUuid);
+    private expressApp: express.Application;
+    private server: any;
+    private strengthMsg = 'strength-0+0+20+20'
+
+    // 单例模式
+    public static getInstance(): Mod {
+        return Mod.instance;
+    }
+
+    constructor() {
+        Mod.instance = this;
+        this.expressApp = express();
+    }
+
+    public preSptLoad(container: DependencyContainer): void {
+        const configServer = container.resolve<ConfigServer>("ConfigServer");
+        const traderConfig = configServer.getConfig<ITraderConfig>(ConfigTypes.TRADER);
+        const preSptModLoader = container.resolve("PreSptModLoader");
+        const staticRouterModService = container.resolve<StaticRouterModService>("StaticRouterModService");
+        const imageRouter = container.resolve<ImageRouter>("ImageRouter")
+        staticRouterModService.registerStaticRouter(
+            "DGLABSendEvent",
+            [
+                {
+                    url: "/launcher/server/serverModsUsedByProfile",
+                    action: (url, info, sessionId, output) => {
+                        //sentGit(container, sessionId)
+                       
+                        console.log(123123123)
+                        this.strengthMsg = 'strength-5+5+20+20'
+                        return output;
+                    }
+                }
+            ],
+            "aki"
+        );
+    }
+
+    public postSptLoad(container: DependencyContainer): void {
+        const logger = container.resolve<ILogger>("WinstonLogger");
+
+        // 启动WebSocket服务器
+        this.startWebSocketServer(logger);
+
+        // 启动Express服务器
+        this.startExpressServer(logger);
+
+        this.createInternalClient(logger);
+    }
+
+    private createInternalClient(logger: ILogger): void {
+        const wsAddress = `ws://192.168.31.70:${CONFIG.WS_PORT}`;
+        const clientId = this.latestClientId
+
+        const client = new WebSocket(wsAddress);
+
+        client.on('open', () => {
+            logger.info(`[INTERNAL CLIENT] Connected to ${wsAddress}`);
+
+
+        });
+
+        client.on('message', (data) => {
+            logger.info(`[INTERNAL CLIENT] Message received: ${data.toString()}`);
+        });
+
+        client.on('error', (err) => {
+            logger.error(`[INTERNAL CLIENT] Error: ${err.message}`);
+        });
+
+        client.on('close', () => {
+            logger.warn(`[INTERNAL CLIENT] Connection closed`);
+        });
+    }
+    private startWebSocketServer(logger: ILogger): void {
+        // 初始化WebSocket服务器
+        const httpServer = this.expressApp.listen(CONFIG.WS_PORT, () => {
+            logger.info(`WebSocket服务器启动在端口: ${CONFIG.WS_PORT}`);
+        });
+
+        this.wsServer = new WebSocketServer({ server: httpServer });
+        this.setupWebSocketHandlers();
+
+        // 启动心跳检测
+
+    }
+
+    private startExpressServer(logger: ILogger): void {
+        // 添加中间件
+        this.expressApp.use(express.json());
+        this.expressApp.use(express.urlencoded({ extended: true }));
+
+        // 注册二维码路由
+        this.registerQRCodeRoute();
+
+        // 启动HTTP服务
+        this.server = this.expressApp.listen(CONFIG.HTTP_PORT, '0.0.0.0', () => {
+            logger.info(`HTTP服务已启动，访问地址: http://192.168.31.70:${CONFIG.HTTP_PORT}`);
+            logger.info(`二维码访问地址: http://192.168.31.70:${CONFIG.HTTP_PORT}/dg-lab/qrcode`);
+        });
+    }
+
+    private registerQRCodeRoute(): void {
+        this.expressApp.get('/dg-lab/qrcode', async (req, res) => {
+            try {
+                // 构建二维码内容
+                const wsAddress = `ws://192.168.31.70:${CONFIG.WS_PORT}`;
+                const qrContent = `https://www.dungeon-lab.com/app-download.php#DGLAB-SOCKET#${wsAddress}/${this.latestClientId}`;
+
+                // 生成二维码数据
+                const qrData = await QRCode.toDataURL(qrContent);
+
+                // 返回HTML页面
+                res.send(`
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>DG-LAB 控制系统</title>
+                        <style>
+                            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+                            h1 { color: #333; }
+                            img { max-width: 100%; height: auto; margin-top: 20px; }
+                        </style>
+                    </head>
+                    <body>
+                        <h1>扫描二维码进行连接</h1>
+                        <p>控制端ID: ${CONFIG.DEFAULT_CLIENT_ID}</p>
+                        <img src="${qrData}" alt="二维码">
+                        <p>有效期: ${CONFIG.QR_CODE_EXPIRE}秒</p>
+                    </body>
+                    </html>
+                `);
+            } catch (error) {
+                res.status(500).send('二维码生成失败');
+            }
+        });
+    }
+
+    public postDBLoad(container: DependencyContainer): void {
+        // 这里不再注册静态路由，因为我们使用Express处理
+    }
+
+    // WebSocket事件处理
+    private setupWebSocketHandlers(): void {
+        this.wsServer.on('connection', (ws) => {
+            const clientId = this.latestClientId
+            console.log(`新连接建立 ID: ${clientId}`);
+
+            this.clients.set(clientId, ws);
+
+            // 发送绑定消息
+            ws.send(JSON.stringify({
+                type: 'bind',
+                clientId: clientId,
+                targetId: this.latestTargetId,
+                message: 'targetId'
+            }));
+            setInterval(() => {
+                //console.log(`[HEARTBEAT] Checking clients. Size: ${this.clients.size}`);
+                if (this.clients.size > 0) {
+                    // 只取第一个客户端发送心跳（适用于单客户端）
+                    const clientId = [...this.clients.keys()][0];
+                    const heartbeat = JSON.stringify({
+                        type: 'heartbeat',
+                        clientId: clientId,
+                        targetId: this.latestTargetId, // 可不填，因为只有一个客户端
+                        message: '200'
+                    });
+                    const client = this.clients.get(clientId);
+                    if (client) {
+                        //console.log(`[HEARTBEAT] Sending to ${clientId}`);
+                        ws.send(heartbeat);
+                    } else {
+                        //console.warn(`[HEARTBEAT] No client found for ${clientId}`);
+                    }
+                }
+            }, CONFIG.HEARTBEAT_INTERVAL);
+            setInterval(() => {
+                //console.log(`[HEARTBEAT] Checking clients. Size: ${this.client
+                const strength = JSON.stringify({
+                    type: 'msg',
+                    clientId: clientId,
+                    targetId: this.latestTargetId, // 可不填，因为只有一个客户端
+                    message: this.strengthMsg
+                });
+                const client = this.clients.get(clientId);
+                ws.send(strength);
+
+            }, 1000);
+            // 更新最新客户端ID
+            //this.latestClientId = clientId;
+
+            // 处理消息
+            ws.on('message', (message) => {
+                try {
+                    const data = JSON.parse(message.toString());
+
+                    // 验证消息格式
+                    if (!this.validateMessage(data)) {
+                        this.sendError(ws, '405', '消息格式错误');
+                        return;
+                    }
+
+                    switch (data.type) {
+                        case 'bind':
+                            this.handleBinding(data, ws);
+                            break;
+                        case 'msg':
+                            this.forwardMessage(data, ws);
+                            break;
+                        case 'heartbeat':
+                            this.handleHeartbeat(data);
+                            break;
+                        case 'break':
+                            this.handleBreak(data, ws);
+                            break;
+                        default:
+                            this.sendError(ws, '406', '未知消息类型');
+                    }
+                } catch (e) {
+                    this.sendError(ws, '403', 'JSON解析失败');
+                }
+            });
+
+            // 连接关闭处理
+            ws.on('close', () => {
+                this.handleClientDisconnect(clientId);
+            });
+
+            // 错误处理
+            ws.on('error', (err) => {
+                logger.error(`WebSocket错误: ${err.message}`);
+                this.sendErrorToClients(clientId, '500', err.message);
+            });
+        });
+    }
+
+    // 消息格式验证
+    private validateMessage(data: any): boolean {
+        return data.type && data.clientId && data.targetId && data.message;
+    }
+
+    // 处理绑定请求
+    private handleBinding(data: any, ws: WebSocket): void {
+        const { clientId, targetId } = data;
+
+        // 验证客户端存在性
+        if (!this.clients.has(clientId) || !this.clients.has(targetId)) {
+            ws.send(JSON.stringify({
+                type: 'bind',
+                clientId,
+                targetId,
+                message: '401'
+            }));
+            return;
+        }
+
+        // 检查是否已绑定
+        if ([...this.relations.keys()].some(id => id === clientId || this.relations.get(id) === clientId)) {
+            ws.send(JSON.stringify({
+                type: 'bind',
+                clientId,
+                targetId,
+                message: '400'
+            }));
+            return;
+        }
+
+        // 建立双向绑定
+        this.relations.set(clientId, targetId);
+        this.relations.set(targetId, clientId);
+
+        // 通知双方绑定成功
+        const response = {
+            type: 'bind',
+            clientId,
+            targetId,
+            message: '200'
+        };
+
+        this.clients.get(clientId)?.send(JSON.stringify(response));
+        this.clients.get(targetId)?.send(JSON.stringify(response));
+
+        console.log(`绑定建立成功: ${clientId} <-> ${targetId}`);
+    }
+
+    // 消息转发
+    private forwardMessage(data: any, ws: WebSocket): void {
+        const { clientId, targetId } = data;
+
+        // 验证绑定关系
+        if (this.relations.get(clientId) !== targetId) {
+            this.sendError(ws, '402', '非绑定关系');
+            return;
+        }
+
+        // 验证目标存在
+        if (!this.clients.has(targetId)) {
+            this.sendError(ws, '404', '目标不存在');
+            return;
+        }
+
+        console.log(`消息转发: ${JSON.stringify(data)}`)
+
+        // 转发消息
+        this.clients.get(targetId)?.send(JSON.stringify(data));
+    }
+
+    // 心跳处理
+    private handleHeartbeat(data: any): void {
+        console.log(`收到心跳 from ${data.clientId}`);
+    }
+
+    // 断开连接处理
+    private handleBreak(data: any, ws: WebSocket): void {
+        console.log(`收到断开请求: ${data.clientId}`);
+    }
+
+    // 客户端断开处理
+    private handleClientDisconnect(clientId: string): void {
+        console.log(`客户端断开: ${clientId}`);
+
+        // 清理绑定关系
+        const targetId = this.relations.get(clientId);
+        if (targetId) {
+            this.relations.delete(clientId);
+            this.relations.delete(targetId);
+
+            // 通知对方断开
+            const breakMsg = {
+                type: 'break',
+                clientId,
+                targetId,
+                message: '209'
+            };
+
+            if (this.clients.has(targetId)) {
+                this.clients.get(targetId)?.send(JSON.stringify(breakMsg));
+            }
+        }
+
+        // 清理连接
+        this.clients.delete(clientId);
+    }
+
+    // 错误消息发送
+    private sendError(ws: WebSocket, code: string, message: string): void {
+        ws.send(JSON.stringify({
+            type: 'error',
+            clientId: '',
+            targetId: '',
+            message: `${code}:${message}`
+        }));
+    }
+
+    // 向所有客户端发送错误
+    private sendErrorToClients(clientId: string, code: string, message: string): void {
+        this.clients.forEach((client) => {
+            client.send(JSON.stringify({
+                type: 'error',
+                clientId,
+                targetId: '',
+                message: `${code}:${message}`
+            }));
+        });
+    }
+}
+
+module.exports = { mod: new Mod() }

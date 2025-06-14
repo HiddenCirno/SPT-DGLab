@@ -1,0 +1,36 @@
+{
+    "manifest": [
+        {
+            "key": "string",
+			"dependencyKeys": [
+            ]
+        },
+        {
+            "key": "string",
+			"dependencyKeys": [
+            ]
+        },
+        {
+            "key": "string",
+			"dependencyKeys": [
+            ]
+        },
+        {
+            "key": "string",
+			"dependencyKeys": [
+            ]
+        },
+        {
+            "key": "string",
+			"dependencyKeys": [
+            ]
+        },
+        {
+            "key": "string",
+			"dependencyKeys": [
+            ]
+        }
+
+    ]
+
+}

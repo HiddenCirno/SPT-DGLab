@@ -1,0 +1,9 @@
+D:\TKFSinglePlayer\GitRepo\DG-Lab-Client\bin\Debug\DGLAB.dll
+D:\TKFSinglePlayer\GitRepo\DG-Lab-Client\bin\Debug\DGLAB.pdb
+D:\TKFSinglePlayer\GitRepo\DG-Lab-Client\bin\Debug\Newtonsoft.Json.dll
+D:\TKFSinglePlayer\GitRepo\DG-Lab-Client\bin\Debug\spt-common.dll
+D:\TKFSinglePlayer\GitRepo\DG-Lab-Client\obj\Debug\DGLAB.csproj.AssemblyReference.cache
+D:\TKFSinglePlayer\GitRepo\DG-Lab-Client\obj\Debug\DGLAB.csproj.CoreCompileInputs.cache
+D:\TKFSinglePlayer\GitRepo\DG-Lab-Client\obj\Debug\DGLAB.csproj.Up2Date
+D:\TKFSinglePlayer\GitRepo\DG-Lab-Client\obj\Debug\DGLAB.dll
+D:\TKFSinglePlayer\GitRepo\DG-Lab-Client\obj\Debug\DGLAB.pdb

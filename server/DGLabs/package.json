@@ -1,0 +1,17 @@
+{
+    "name": "1231231231",
+    "version": "1.0.0",
+    "main": "src/mod.js",
+    "license": "CC-BY-SA",
+    "author": "千叶玲花",
+    "sptVersion": "*.*.*",
+    "modDependencies": {
+        "[火神之心]VulcanCore": ">=3.9.2"
+    },
+    "dependencies": {
+        "express": "^5.1.0",
+        "qrcode": "^1.5.4",
+        "uuid": "^11.1.0",
+        "ws": "^8.18.2"
+    }
+}

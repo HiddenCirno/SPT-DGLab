@@ -1,0 +1,7 @@
+{
+    "localIP": "192.168.31.70",
+    "wsPort": 9999,
+    "qrCodePort": 3001,
+    "channelABaseStrength": 20,
+    "channelBBaseStrength": 20
+}

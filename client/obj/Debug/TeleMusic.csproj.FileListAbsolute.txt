@@ -1,0 +1,10 @@
+E:\QQ数据\AT.TKF\bin\Debug\TeleMusic.dll
+E:\QQ数据\AT.TKF\bin\Debug\TeleMusic.pdb
+E:\QQ数据\AT.TKF\obj\Debug\TeleMusic.csproj.CoreCompileInputs.cache
+E:\QQ数据\AT.TKF\obj\Debug\TeleMusic.dll
+E:\QQ数据\AT.TKF\obj\Debug\TeleMusic.pdb
+D:\TKFSinglePlayer\GitRepo\AT.TKF - 副本\bin\Debug\TeleMusic.dll
+D:\TKFSinglePlayer\GitRepo\AT.TKF - 副本\bin\Debug\TeleMusic.pdb
+D:\TKFSinglePlayer\GitRepo\AT.TKF - 副本\obj\Debug\TeleMusic.csproj.CoreCompileInputs.cache
+D:\TKFSinglePlayer\GitRepo\AT.TKF - 副本\obj\Debug\TeleMusic.dll
+D:\TKFSinglePlayer\GitRepo\AT.TKF - 副本\obj\Debug\TeleMusic.pdb
