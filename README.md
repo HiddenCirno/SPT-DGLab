@@ -74,9 +74,13 @@
 
 {
   "localIP": "192.168.31.70",        // 绑定本地服务的IP地址，填写你启动游戏的设备的局域网地址
+
   "wsPort": 9999,                       // WebSocket 服务端口
+
   "qrCodePort": 3001,                  // 二维码广播端口
+
   "channelABaseStrength": 20,        // A通道基础强度
+  
   "channelBBaseStrength": 20         // B通道基础强度
 }
 
