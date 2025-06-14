@@ -3,7 +3,7 @@
 
 > 通过郊狼3.0新增的WebSocket功能，允许游戏通过Mod实现控制郊狼设备，做到根据游戏状况实时调整强度。
 
-![Header](https://your.image.url/header.png)
+![Header](https://github.com/HiddenCirno/SPT-DGLab/blob/main/%E4%BB%93%E5%BA%93%E5%A4%B4%E5%9B%BE.png)
 
 ---
 
