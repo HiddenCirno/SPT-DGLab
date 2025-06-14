@@ -1,8 +1,9 @@
 # SPT-DGLab
 一个通过WebSocket将SPT（SinglePlayerTarkov/逃离塔科夫离线版）与郊狼设备进行连接的项目
-![Header](https://your.image.url/header.png)
 
 > 通过郊狼3.0新增的WebSocket功能，允许游戏通过Mod实现控制郊狼设备，做到根据游戏状况实时调整强度。
+
+![Header](https://your.image.url/header.png)
 
 ---
 
