@@ -72,7 +72,7 @@ namespace SPTDGLab
                 int countA = CfgManager.ExitStengthCountA.Value;
                 int countB = CfgManager.ExitStengthCountB.Value;
                 //根据撤离状态决定增减基础强度
-                if (exitStatus == ExitStatus.Killed || exitStatus == ExitStatus.MissingInAction)
+                if (exitStatus == ExitStatus.Killed || exitStatus == ExitStatus.MissingInAction || exitStatus == ExitStatus.Left)
                 {
                     StrengthController.TransBaseStrength(1, countA);
                     StrengthController.TransBaseStrength(2, countB);
