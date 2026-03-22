@@ -1,0 +1,5 @@
+# 屏蔽自动生成
+bin/
+# VSCode
+.vs/
+obj/
