@@ -18,6 +18,9 @@ namespace SPTDGLab
         {
             //初始化配置
             CfgManager.Initialize(Config);
+            //这个在配置里初始化了, 所以注释掉
+            //WaveformManager.Initialize();
+            WaveformCfg.Initialize(Config);
             //生成客户端ID
             ClientId = Guid.NewGuid().ToString();
             //生成控制链接
@@ -73,7 +76,6 @@ namespace SPTDGLab
                 Console.WriteLine("[DG-LAB] 尚未连接设备，跳过发送。");
                 return;
             }
-
             //构造控制命令
             string messageContent = $"strength-{channel}+{mode}+{value}";
             //构造请求
@@ -84,9 +86,8 @@ namespace SPTDGLab
                 targetId = WebSocketManager.DGLabBehavior.targetId,
                 message = messageContent
             };
-
+            //序列化数据
             string json = JsonConvert.SerializeObject(payload);
-
             try
             {
                 //通过WS发送给设备
