@@ -12,7 +12,7 @@ namespace SPTDGLab
     internal class GamePatch
     {
         //监听肢体损毁和恢复
-        [HarmonyPatch(typeof(ActiveHealthController), "DestroyBodyPart")]
+        [HarmonyPatch(typeof(ActiveHealthController), nameof(ActiveHealthController.DestroyBodyPart))]
         public class DestroyBodyPartPatch
         {
             [HarmonyPostfix]
@@ -31,7 +31,7 @@ namespace SPTDGLab
             }
         }
         //监听肢体恢复, 计算逻辑取反, 其余相同
-        [HarmonyPatch(typeof(ActiveHealthController), "RestoreBodyPart")]
+        [HarmonyPatch(typeof(ActiveHealthController), nameof(ActiveHealthController.RestoreBodyPart))]
         public class RestoreBodyPartPartPatch
         {
             [HarmonyPostfix]
@@ -87,7 +87,7 @@ namespace SPTDGLab
             }
         }
         //监听生命变化
-        [HarmonyPatch(typeof(EFT.HealthStatisticsManager), "OnHealthChanged")]
+        [HarmonyPatch(typeof(EFT.HealthStatisticsManager), nameof(EFT.HealthStatisticsManager.OnHealthChanged))]
         public static class HealthStatisticsManager_OnHealthChanged_Patch
         {
             [HarmonyPostfix]
@@ -105,7 +105,7 @@ namespace SPTDGLab
             }
         }
         //游戏开始
-        [HarmonyPatch(typeof(GameWorld), "OnGameStarted")]
+        [HarmonyPatch(typeof(GameWorld), nameof(GameWorld.OnGameStarted))]
         public class Patch_GameWorld_OnGameStarted
         {
             // Postfix 方法
