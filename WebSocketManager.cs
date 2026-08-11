@@ -18,9 +18,9 @@ namespace SPTDGLab
             //手机控制端ID
             public static string targetId = "";
             //心跳计时器
-            public Timer heartbeatTimer;
+            public System.Timers.Timer heartbeatTimer;
             //波形计时器
-            public Timer pulseTimer;
+            public System.Timers.Timer pulseTimer;
             //AB通道波形数据
             private int pulseIndexA = 0;
             private int pulseIndexB = 0;
@@ -38,10 +38,10 @@ namespace SPTDGLab
                 };
                 Send(JsonConvert.SerializeObject(bindMsg));
                 //启动静默心跳服务
-                heartbeatTimer = new Timer(30000);
+                heartbeatTimer = new System.Timers.Timer(30000);
                 heartbeatTimer.Elapsed += (sender, e) => SendHeartbeat();
                 heartbeatTimer.Start();
-                pulseTimer = new Timer(1000);
+                pulseTimer = new System.Timers.Timer(1000);
                 //启动波形服务
                 pulseTimer.Elapsed += (sender, e) => SendPulseData();
                 pulseTimer.Start();

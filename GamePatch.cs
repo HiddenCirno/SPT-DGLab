@@ -59,15 +59,15 @@ namespace SPTDGLab
                 return AccessTools.Method(targetType, "Show", new Type[]
                 {
             typeof(Profile),
-            typeof(LastPlayerStateClass),
+            typeof(EFT.PlayerVisualRepresentation),
             typeof(ESideType),
             typeof(ExitStatus),
             typeof(TimeSpan),
-            typeof(ISession),
+            typeof(EFT.IEftSession),
             typeof(bool)
                 });
             }
-            static void Prefix(Profile activeProfile, LastPlayerStateClass lastPlayerState, ESideType side, ExitStatus exitStatus, TimeSpan raidTime, ISession session, bool isOnline)
+            static void Prefix(Profile activeProfile, EFT.PlayerVisualRepresentation lastPlayerState, ESideType side, ExitStatus exitStatus, TimeSpan raidTime, EFT.IEftSession session, bool isOnline)
             {
                 int countA = CfgManager.ExitStengthCountA.Value;
                 int countB = CfgManager.ExitStengthCountB.Value;
@@ -87,11 +87,11 @@ namespace SPTDGLab
             }
         }
         //监听生命变化
-        [HarmonyPatch(typeof(GClass2266), "OnHealthChanged")]
-        public static class GClass2266_OnHealthChanged_Patch
+        [HarmonyPatch(typeof(EFT.HealthStatisticsManager), "OnHealthChanged")]
+        public static class HealthStatisticsManager_OnHealthChanged_Patch
         {
             [HarmonyPostfix]
-            public static void Postfix(GClass2266 __instance, EBodyPart bodyPart, float diff, DamageInfoStruct damageInfo)
+            public static void Postfix(EFT.HealthStatisticsManager __instance, EBodyPart bodyPart, float diff, EFT.Ballistics.DamageInfo damageInfo)
             {
                 if (StrengthController.gameWorld)
                 {
